@@ -1,0 +1,22 @@
+说到并发不得不谈的就是多线程,说到多线程要先讲一个object和Monitor之间的关系
+每个object都包含一个monitor成员变量,而这个成员变量是指向lockword的,在art虚拟机中称之为lockword,在Hotspot虚拟机中称之为markWord,而每个monitor之中都有一个成员函数obj,这个obj就是指向对应的Object的,而在java中每个Thread在art虚拟机中都对应一个Monitor ,由于monitor是一个非常重要的资源,每次的切换都需要花费大量的CPU单位,所以art虚拟机还创建了monitorlist和monitorpool来协同管理monitor,而我们知道lockword实际上是跟锁息息相关的,lockWord是一个32位的成员变量,这种设计的好处就是,
+1. monitor是一个非常重的资源,并不是每个object都需要monitor的,由lockword中判断是否需要一个monitor的创建
+2. 在synchronized代码段中只有单线程访问的时候monitor能起到一个轻量级的保护,在art虚拟机中这种锁称之为thin lock
+3. 当多线程访问的时候monitor能够起到一个真正的保护作用,而上锁解锁是需要操作系统来控制的,在art虚拟机中这种锁叫fat lock,而转化为一个fat lock的过程其实就是关联一个monitor对象的过程
+从object的hash方法中我们可以看到monitor就是lockword,其中高10 是hash模式
+在art虚拟机中锁的状态分为主要分为3种
+1. unlock状态  00     
+    thin lock 状态 00锁状态 rb 读写屏障 lockcount  thread id 
+2. fat lock 01 锁状态  rb 读写屏障 monitor id
+3. hash 10 
+4. address 11
+那么一个对象是如何进行加锁的呢
+说到锁就不得不谈synchronized,synchronized在进入代码块的时候会创建monitor_enter指令,在退出synchronized代码块的时候会创建monitor_exit指令
+而monitor_enter就是对lockword进行lockcount++或者升级锁的地方,同理monitor是对lockcount进行lockcount--或者锁降级的地方
+当只有一个线程访问锁对象的时候lockword的高31-30 置位00 29-28 保存rb 27-16 保存锁进入的次数 0-15位保存线程id,此时当前锁对象是属于thin lock状态
+当当前线程多次访问当前锁对象的时候lockcount 超出 所能保存的最大值4096,则锁升级为fat lock
+当有多个线程来抢占锁的时候首先会让抢锁线程让出50个CPU单位,50个CPU单位之后继续抢锁,如果此时抢锁成功则当前锁对象还是 00 状态,lockcount和threadid发生更改
+当50CPU单位后仍然没有抢到锁的时候锁对象会变成fat lock,此时31-30 变成01 标志着锁进入fat lock 状态,并将thread stateandtag标志为stop状态,将锁拥有者的lockword更换为fat lock状态
+  
+每一个java的thread都对应art虚拟机中的一个Monitor Thread对象,为了方便Thread的管理ART设计了ThreadList和monitor thread,从Thread list中我们可以看到maxthreadid的最大值是0xffff = 65535,也就是说一个art虚拟机能够分配的最大的线程数是65535个,但是从现有测试来看以华为mate20 为例约为5000个,操过这个值则系统死机
+synchronized是在多线程编程中十分常见的,在synchronized进入的时候会创建monitorenter指令,在离开代码块是生成monitorexit指令,每个thread都和一个monitor对应,而monitor是操作系统中十分钟要的资源,所以art提供了monitor来管理monitor,
